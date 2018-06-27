@@ -68,11 +68,16 @@ bool CCoinsViewDB::BatchWrite(CCoinsMap &mapCoins, const uint256 &hashBlock) {
 }
 
 CBlockTreeDB::CBlockTreeDB(size_t nCacheSize, bool fMemory, bool fWipe) : CDBWrapper(GetDataDir() / "blocks" / "index", nCacheSize, fMemory, fWipe) {
+    if (!Read('S', salt)) {
+        salt = GetRandHash();
+        Write('S', salt);
+    }
 }
 
 bool CBlockTreeDB::ReadBlockFileInfo(int nFile, CBlockFileInfo &info) {
     return Read(std::make_pair(DB_BLOCK_FILES, nFile), info);
 }
+
 
 bool CBlockTreeDB::WriteReindexing(bool fReindexing) {
     if (fReindexing)
@@ -154,6 +159,41 @@ bool CBlockTreeDB::WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos>
     CDBBatch batch(*this);
     for (std::vector<std::pair<uint256,CDiskTxPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
         batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
+    return WriteBatch(batch);
+}
+
+bool CBlockTreeDB::ReadAddrIndex(const uint160 &addrid, std::vector<CExtDiskTxPos> &list) {
+    CLevelDBIterator *iter = NewIterator();
+    uint64_t lookupid;
+    {
+        CHashWriter ss(SER_GETHASH, 0);
+        ss << salt;
+        ss << addrid;
+        lookupid = UintToArith256(ss.GetHash()).GetLow64();
+    }
+    iter->Seek(make_pair('a', lookupid));
+    while (iter->Valid()) {
+        std::pair<std::pair<char, uint64_t>, CExtDiskTxPos> key;
+        if (iter->GetKey(key) && key.first.first == 'a' && key.first.second == lookupid) {
+            list.push_back(key.second);
+        } else {
+            break;
+        }
+        iter->Next();
+    }
+    delete iter;
+    return true;
+}
+
+bool CBlockTreeDB::AddAddrIndex(const std::vector<std::pair<uint160, CExtDiskTxPos> > &list) {
+    unsigned char foo[0];
+    CLevelDBBatch batch;
+    for (std::vector<std::pair<uint160, CExtDiskTxPos> >::const_iterator it=list.begin(); it!=list.end(); it++) {
+        CHashWriter ss(SER_GETHASH, 0);
+        ss << salt;
+        ss << it->first;
+        batch.Write(make_pair(make_pair('a', UintToArith256(ss.GetHash()).GetLow64()), it->second), FLATDATA(foo));
+    }
     return WriteBatch(batch);
 }
 
